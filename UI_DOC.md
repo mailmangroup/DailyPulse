@@ -1,7 +1,7 @@
 # UI/UX Style Document
 
 ## Overview
-This document outlines the UI/UX styling principles derived from the "HealthySpace" dashboard reference image. The design is a modern, dark-themed dashboard with soft rounded corners and a distinct mint-green accent color.
+This document outlines the UI/UX styling principles. The design is a modern, dark-themed dashboard with soft rounded corners and a distinct mint-green accent color.
 
 ## Color Palette
 - **Background (App)**: `#121212` or `zinc-950` (Very dark, almost black)
