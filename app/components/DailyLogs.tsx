@@ -139,7 +139,7 @@ function ScrollFade({ children, deps = [] }: { children: (props: { ref: React.Re
       {children({
         ref,
         onScroll: check,
-        className: "visible-scrollbar h-full overflow-y-scroll pr-2",
+        className: "visible-scrollbar h-full min-h-0 overflow-y-scroll pr-2",
       })}
       {showBottomCue && (
         <>
@@ -466,7 +466,7 @@ export default function DailyLogs({ date, initialProfiles, logs, onLogUpsert, on
               transition={{ type: 'spring', stiffness: 300, damping: 24 }}
             >
               <Card className={cn(
-                'group relative grid h-[210px] w-full grid-rows-[3.7rem_1fr] overflow-hidden border bg-card/85 py-0 shadow-sm transition-all duration-300 hover:shadow-lg gap-0',
+                'group relative grid h-[210px] min-h-0 w-full grid-rows-[3.7rem_minmax(0,1fr)] overflow-hidden border bg-card/85 py-0 shadow-sm transition-all duration-300 hover:shadow-lg gap-0',
                 tone.border,
                 isOwn && 'shadow-primary/10',
                 rank === 1 && 'shadow-yellow-400/20 shadow-md',
@@ -600,10 +600,10 @@ export default function DailyLogs({ date, initialProfiles, logs, onLogUpsert, on
                     </div>
                   </div>
                 </CardHeader>
-                <CardContent className="relative z-10 flex flex-1 flex-col px-3.5 pb-3 pt-1">
+                <CardContent className="relative z-10 flex min-h-0 flex-1 flex-col px-3.5 pb-3 pt-1">
                   <ScrollFade deps={[inputValue, log?.activities]}>
                     {({ ref, onScroll, className }) => isOwn ? (
-                      <div ref={ref as React.RefObject<HTMLDivElement>} onScroll={onScroll} className={cn(className, "w-full")}>
+                      <div ref={ref as React.RefObject<HTMLDivElement>} onScroll={onScroll} className={cn(className, "w-full min-h-0")}>
                         <ChecklistEditor
                           value={inputValue}
                           onChange={(v) => {
@@ -619,7 +619,7 @@ export default function DailyLogs({ date, initialProfiles, logs, onLogUpsert, on
                         />
                       </div>
                     ) : (
-                      <div ref={ref as React.RefObject<HTMLDivElement>} onScroll={onScroll} className={className}>
+                      <div ref={ref as React.RefObject<HTMLDivElement>} onScroll={onScroll} className={cn(className, "min-h-0")}>
                         <ChecklistViewer 
                           value={log?.activities ?? ''} 
                           emptyText={t('noTasksLoggedYet')}
