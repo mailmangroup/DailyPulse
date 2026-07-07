@@ -144,8 +144,8 @@ function ScrollFade({ children, deps = [] }: { children: (props: { ref: React.Re
       {showBottomCue && (
         <>
           <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-7 bg-gradient-to-t from-card via-card/85 to-transparent" />
-          <div className="pointer-events-none absolute bottom-1.5 right-3 flex h-5 items-center justify-center rounded-full bg-card/95 px-1.5 text-muted-foreground shadow-sm ring-1 ring-border/70">
-            <ChevronDown className="h-3.5 w-3.5 animate-bounce" />
+          <div className="pointer-events-none absolute bottom-1.5 right-3 flex h-5 items-center justify-center rounded-full bg-card/95 px-1.5 text-muted-foreground shadow-sm ring-1 ring-border/70 opacity-70">
+            <ChevronDown className="h-3.5 w-3.5" />
           </div>
         </>
       )}

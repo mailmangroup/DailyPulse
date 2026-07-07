@@ -154,13 +154,13 @@ export function ChecklistEditor({ value, onChange, onSave, placeholder, classNam
   };
 
   return (
-    <div ref={rootRef} className={cn("flex flex-col gap-2", className)}>
+    <div ref={rootRef} className={cn("flex flex-col gap-0.5", className)}>
       {items.map((item, index) => (
         <div key={item.id} className="flex items-start gap-2 group">
           <button
             type="button"
             onClick={() => handleItemToggle(index)}
-            className="mt-[3px] shrink-0 text-muted-foreground hover:text-primary transition-colors focus:outline-none"
+            className="mt-[2px] shrink-0 text-muted-foreground hover:text-primary transition-colors focus:outline-none"
           >
             {item.checked ? (
               <CheckSquare className="w-3.5 h-3.5 text-primary" />
@@ -174,7 +174,7 @@ export function ChecklistEditor({ value, onChange, onSave, placeholder, classNam
               resizeTextarea(el);
             }}
             className={cn(
-              "flex-1 resize-none overflow-hidden bg-transparent px-0 py-0 text-xs leading-[1.2rem] outline-none placeholder:text-muted-foreground/60 min-w-0",
+              "flex-1 resize-none overflow-hidden bg-transparent px-0 py-0 text-xs leading-[1.1rem] outline-none placeholder:text-muted-foreground/60 min-w-0",
               item.checked && "text-muted-foreground line-through decoration-muted-foreground/50"
             )}
             rows={1}
@@ -217,10 +217,10 @@ export function ChecklistViewer({ value, className, emptyText }: ChecklistViewer
   }
 
   return (
-    <div className={cn("flex flex-col gap-2", className)}>
+    <div className={cn("flex flex-col gap-0.5", className)}>
       {validItems.map((item, index) => (
         <div key={index} className="flex items-start gap-2">
-          <div className="mt-[3px] shrink-0 text-muted-foreground">
+          <div className="mt-[2px] shrink-0 text-muted-foreground">
             {item.checked ? (
               <CheckSquare className="w-3.5 h-3.5 opacity-80" />
             ) : (
@@ -229,7 +229,7 @@ export function ChecklistViewer({ value, className, emptyText }: ChecklistViewer
           </div>
           <span
             className={cn(
-              "flex-1 text-xs leading-[1.2rem] break-words min-w-0",
+              "flex-1 text-xs leading-[1.1rem] break-words min-w-0",
               item.checked ? "text-muted-foreground line-through decoration-muted-foreground/50" : "text-foreground/90"
             )}
           >
