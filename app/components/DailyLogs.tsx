@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { cn, getInitials } from '@/lib/utils'
 import type { Profile, DailyLog, WorkStatus } from '@/types/supabase'
+import { normalizeWorkStatus } from '@/types/supabase'
 import { useLocale } from '@/app/components/locale-provider'
 import type { TranslationKey } from '@/app/components/locale-provider'
 import {
@@ -15,10 +16,11 @@ import {
 } from '@/components/ui/select'
 
 import { motion, AnimatePresence } from 'framer-motion'
-import { Trophy, Medal, X, Info, ChevronDown, Camera } from 'lucide-react'
+import { Trophy, Medal, X, Info, ChevronDown, Camera, Crown } from 'lucide-react'
 import confetti from 'canvas-confetti'
 
 import { ChecklistEditor, ChecklistViewer } from './Checklist'
+import StatusSummaryCards from './StatusSummaryCards'
 
 type StatusTone = 'in_office' | 'wfh' | 'off' | 'unknown'
 
@@ -33,8 +35,6 @@ const STATUS_DOT_COLORS: Record<WorkStatus, string> = {
   in_office: 'bg-[var(--status-emerald-dot)]',
   wfh: 'bg-[var(--status-sky-dot)]',
   off: 'bg-[var(--status-zinc-dot)]',
-  sick: 'bg-amber-400',
-  vacation: 'bg-violet-400',
 }
 
 const STATUS_CHIP_BASE =
@@ -47,20 +47,79 @@ const getStatusTone = (status: WorkStatus | null): StatusTone => {
 }
 
 const getStatusLabel = (status: WorkStatus, t: (key: TranslationKey) => string) => {
-  switch (status) {
+  switch (normalizeWorkStatus(status)) {
     case 'in_office':
       return t('statusInOffice')
     case 'wfh':
       return t('statusWfh')
     case 'off':
       return t('statusOff')
-    case 'sick':
-      return t('statusSick')
-    case 'vacation':
-      return t('statusVacation')
-    default:
-      return t('statusOff')
   }
+}
+
+function getMonthRange(date: string) {
+  const dateObj = new Date(date)
+  const year = dateObj.getFullYear()
+  const month = String(dateObj.getMonth() + 1).padStart(2, '0')
+  const startDate = `${year}-${month}-01`
+
+  const endObj = new Date(year, dateObj.getMonth() + 1, 0)
+  const endYear = endObj.getFullYear()
+  const endMonth = String(endObj.getMonth() + 1).padStart(2, '0')
+  const endDay = String(endObj.getDate()).padStart(2, '0')
+  const endDate = `${endYear}-${endMonth}-${endDay}`
+
+  return { startDate, endDate }
+}
+
+function computeMonthlyLeaderboard(monthLogs: DailyLog[], profiles: Profile[]) {
+  const logsByDate: Record<string, DailyLog[]> = {}
+  monthLogs.forEach(log => {
+    if (!logsByDate[log.date]) logsByDate[log.date] = []
+    logsByDate[log.date].push(log)
+  })
+
+  const scores: Record<string, number> = {}
+  profiles.forEach(p => { scores[p.id] = 0 })
+  const N = profiles.length
+
+  Object.values(logsByDate).forEach(dayLogs => {
+    if (dayLogs.length > 5) {
+      const sortedDayLogs = [...dayLogs].sort((a, b) => {
+        const tA = new Date(a.activities_at ?? a.created_at).getTime()
+        const tB = new Date(b.activities_at ?? b.created_at).getTime()
+        return tA - tB
+      })
+
+      sortedDayLogs.forEach((log, index) => {
+        const rank = index + 1
+        const score = N - rank + 1
+        if (scores[log.user_id] !== undefined) {
+          scores[log.user_id] += score
+        }
+      })
+    }
+  })
+
+  const leaderboard = profiles
+    .map(p => ({ profile: p, score: scores[p.id] }))
+    .sort((a, b) => b.score - a.score)
+
+  const notLoggedCounts: Record<string, number> = {}
+  profiles.forEach(p => { notLoggedCounts[p.id] = 0 })
+  Object.values(logsByDate).forEach(dayLogs => {
+    if (dayLogs.length > 5) {
+      const loggedIds = new Set(dayLogs.map(l => l.user_id))
+      profiles.forEach(p => {
+        if (!loggedIds.has(p.id)) notLoggedCounts[p.id]++
+      })
+    }
+  })
+  const notLogged = profiles
+    .map(p => ({ profile: p, missedDays: notLoggedCounts[p.id] }))
+    .sort((a, b) => b.missedDays - a.missedDays)
+
+  return { leaderboard, notLogged }
 }
 
 const RankBadge = ({ rank }: { rank: number | null }) => {
@@ -171,93 +230,41 @@ export default function DailyLogs({ date, initialProfiles, logs, onLogUpsert, on
   const [leaderboardLoading, setLeaderboardLoading] = useState(false)
   const [leaderboardData, setLeaderboardData] = useState<{ profile: Profile; score: number }[]>([])
   const [notLoggedData, setNotLoggedData] = useState<{ profile: Profile; missedDays: number }[]>([])
+  const [monthlyWinner, setMonthlyWinner] = useState<Profile | null>(null)
 
-  const openLeaderboard = async () => {
-    setLeaderboardOpen(true)
-    setLeaderboardLoading(true)
-    
-    // Get current month start and end dates
-    const dateObj = new Date(date)
-    const year = dateObj.getFullYear()
-    const month = String(dateObj.getMonth() + 1).padStart(2, '0')
-    const startDate = `${year}-${month}-01`
-    
-    // Last day of month
-    const nextMonth = dateObj.getMonth() + 1
-    const endObj = new Date(year, nextMonth, 0)
-    const endYear = endObj.getFullYear()
-    const endMonth = String(endObj.getMonth() + 1).padStart(2, '0')
-    const endDay = String(endObj.getDate()).padStart(2, '0')
-    const endDate = `${endYear}-${endMonth}-${endDay}`
-
+  const fetchMonthLogs = async () => {
+    const { startDate, endDate } = getMonthRange(date)
     const { data: monthLogs } = await supabase
       .from('daily_logs')
       .select('*')
       .gte('date', startDate)
       .lte('date', endDate)
+    return monthLogs ?? []
+  }
 
-    if (!monthLogs) {
-      setLeaderboardData([])
-      setLeaderboardLoading(false)
-      return
-    }
+  const openLeaderboard = async () => {
+    setLeaderboardOpen(true)
+    setLeaderboardLoading(true)
 
-    // Group logs by date
-    const logsByDate: Record<string, DailyLog[]> = {}
-    monthLogs.forEach(log => {
-      if (!logsByDate[log.date]) logsByDate[log.date] = []
-      logsByDate[log.date].push(log)
-    })
-
-    const scores: Record<string, number> = {}
-    initialProfiles.forEach(p => scores[p.id] = 0)
-    const N = initialProfiles.length
-
-    // Score logic
-    Object.values(logsByDate).forEach(dayLogs => {
-      // Only count days with more than 5 members
-      if (dayLogs.length > 5) {
-        // Sort by activities_at or created_at
-        const sortedDayLogs = [...dayLogs].sort((a, b) => {
-          const tA = new Date(a.activities_at ?? a.created_at).getTime()
-          const tB = new Date(b.activities_at ?? b.created_at).getTime()
-          return tA - tB
-        })
-
-        // Assign points based on rank
-        sortedDayLogs.forEach((log, index) => {
-          const rank = index + 1
-          const score = N - rank + 1
-          if (scores[log.user_id] !== undefined) {
-            scores[log.user_id] += score
-          }
-        })
-      }
-    })
-
-    const leaderboard = initialProfiles.map(p => ({
-      profile: p,
-      score: scores[p.id]
-    })).sort((a, b) => b.score - a.score)
-
-    const notLoggedCounts: Record<string, number> = {}
-    initialProfiles.forEach(p => { notLoggedCounts[p.id] = 0 })
-    Object.values(logsByDate).forEach(dayLogs => {
-      if (dayLogs.length > 5) {
-        const loggedIds = new Set(dayLogs.map(l => l.user_id))
-        initialProfiles.forEach(p => {
-          if (!loggedIds.has(p.id)) notLoggedCounts[p.id]++
-        })
-      }
-    })
-    const notLogged = initialProfiles
-      .map(p => ({ profile: p, missedDays: notLoggedCounts[p.id] }))
-      .sort((a, b) => b.missedDays - a.missedDays)
+    const monthLogs = await fetchMonthLogs()
+    const { leaderboard, notLogged } = computeMonthlyLeaderboard(monthLogs, initialProfiles)
 
     setLeaderboardData(leaderboard)
     setNotLoggedData(notLogged)
+    setMonthlyWinner(leaderboard[0]?.score > 0 ? leaderboard[0].profile : null)
     setLeaderboardLoading(false)
   }
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const monthLogs = await fetchMonthLogs()
+      if (cancelled) return
+      const { leaderboard } = computeMonthlyLeaderboard(monthLogs, initialProfiles)
+      setMonthlyWinner(leaderboard[0]?.score > 0 ? leaderboard[0].profile : null)
+    })()
+    return () => { cancelled = true }
+  }, [date, initialProfiles, supabase])
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -423,215 +430,313 @@ export default function DailyLogs({ date, initialProfiles, logs, onLogUpsert, on
       return new Date(tA).getTime() - new Date(tB).getTime()
     })
 
-  const sortedOtherProfiles = rankedProfiles.filter((p) => p.id !== currentUserId)
+  const ownProfile = currentUserId
+    ? initialProfiles.find((p) => p.id === currentUserId) ?? null
+    : null
 
-  const orderedProfiles = currentUserId
-    ? [
-        ...initialProfiles.filter((p) => p.id === currentUserId),
-        ...sortedOtherProfiles,
-      ]
-    : sortedOtherProfiles
+  type GridItem =
+    | { kind: 'own'; profile: Profile }
+    | { kind: 'ghost'; profile: Profile }
+    | { kind: 'other'; profile: Profile }
+
+  const ownItem: GridItem | null = ownProfile
+    ? { kind: 'own', profile: ownProfile }
+    : null
+
+  const teamItems: GridItem[] = rankedProfiles.map((profile) =>
+    profile.id === currentUserId
+      ? { kind: 'ghost', profile }
+      : { kind: 'other', profile }
+  )
+
+  const renderCard = (item: GridItem) => {
+    const { kind, profile } = item
+    const isOwn = kind === 'own'
+    const isGhost = kind === 'ghost'
+    const log = logs.find((l) => l.user_id === profile.id)
+    const displayName = profile.name || profile.email.split('@')[0]
+    const initials = getInitials(profile.name ?? profile.email)
+    const tone = STATUS_COLORS[getStatusTone(log?.status ?? null)]
+    const saveStatusText = isOwn ? getSaveStatusText() : null
+
+    const rankIndex = rankedProfiles.findIndex((p) => p.id === profile.id)
+    const rank = rankIndex !== -1 ? rankIndex + 1 : null
+
+    return (
+      <motion.div
+        key={isGhost ? `ghost-${profile.id}` : profile.id}
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        whileHover={isGhost ? undefined : { y: -2 }}
+        transition={{ type: 'spring', stiffness: 300, damping: 24 }}
+        className={cn(
+          isOwn && 'flex w-full min-h-0 flex-1',
+          isGhost && 'group/ghost relative'
+        )}
+      >
+        {isGhost && (
+          <div
+            role="tooltip"
+            className="pointer-events-none absolute left-1/2 top-2 z-20 -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-popover px-2.5 py-1 text-[11px] font-medium text-popover-foreground opacity-0 shadow-md transition-opacity duration-75 group-hover/ghost:opacity-100"
+          >
+            {t('editInYourTasks')}
+          </div>
+        )}
+        <Card className={cn(
+          'group relative grid min-h-0 w-full grid-rows-[3.7rem_minmax(0,1fr)] overflow-hidden border py-0 shadow-sm transition-all duration-300 gap-0',
+          isOwn ? 'h-full min-h-[210px]' : 'h-[210px]',
+          isGhost
+            ? 'border-dashed border-border/80 bg-muted/20 opacity-[0.72] shadow-none'
+            : isOwn
+              ? cn(
+                  'bg-card shadow-md ring-2 ring-primary/25 hover:shadow-lg',
+                  tone.border,
+                  rank === 1 && 'shadow-yellow-400/20',
+                  rank === 2 && 'shadow-slate-400/20',
+                  rank === 3 && 'shadow-amber-600/20'
+                )
+              : cn(
+                  'bg-card/85 hover:shadow-lg',
+                  tone.border,
+                  rank === 1 && 'shadow-yellow-400/20 shadow-md',
+                  rank === 2 && 'shadow-slate-400/20 shadow-md',
+                  rank === 3 && 'shadow-amber-600/20 shadow-md'
+                )
+          )} size="sm">
+          <CardHeader className={cn(
+            "relative z-10 flex h-full flex-row items-center gap-2.5 px-3.5 py-2",
+            isGhost ? "bg-muted/20" :
+            rank === 1 ? "bg-gradient-to-r from-yellow-400/10 to-transparent" :
+            rank === 2 ? "bg-gradient-to-r from-slate-400/10 to-transparent" :
+            rank === 3 ? "bg-gradient-to-r from-amber-600/10 to-transparent" :
+            isOwn ? "bg-primary/5" :
+            "bg-muted/15"
+          )}>
+            <div className="relative shrink-0">
+              {isOwn ? (
+                <button
+                  type="button"
+                  onClick={onEditProfile}
+                  title={t('editProfile')}
+                  className={cn(
+                    'group/avatar flex h-8.5 w-8.5 shrink-0 items-center justify-center overflow-hidden rounded-full ring-1.5 shadow-sm text-xs font-medium cursor-pointer',
+                    rank === 1 ? 'ring-yellow-400/80' :
+                    rank === 2 ? 'ring-slate-400/80' :
+                    rank === 3 ? 'ring-amber-600/80' :
+                    tone.ring,
+                    !profile.avatar_url && (
+                      rank === 1 ? 'bg-yellow-400/20 text-yellow-600 dark:text-yellow-400' :
+                      rank === 2 ? 'bg-slate-400/20 text-slate-600 dark:text-slate-300' :
+                      rank === 3 ? 'bg-amber-600/20 text-amber-700 dark:text-amber-500' :
+                      tone.fallback
+                    ),
+                    !log && 'animate-pulse'
+                  )}
+                >
+                  {profile.avatar_url ? (
+                    <img src={profile.avatar_url} alt={displayName} referrerPolicy="no-referrer" className="h-full w-full object-cover" />
+                  ) : (
+                    initials
+                  )}
+                  <span className="absolute inset-0 hidden items-center justify-center bg-black/50 text-white group-hover/avatar:flex">
+                    <Camera className="h-3.5 w-3.5" />
+                  </span>
+                </button>
+              ) : (
+                <div className={cn(
+                  'flex h-8.5 w-8.5 shrink-0 items-center justify-center overflow-hidden rounded-full ring-1.5 shadow-sm text-xs font-medium',
+                  isGhost ? 'ring-border opacity-70' :
+                  rank === 1 ? 'ring-yellow-400/80' :
+                  rank === 2 ? 'ring-slate-400/80' :
+                  rank === 3 ? 'ring-amber-600/80' :
+                  tone.ring,
+                  !profile.avatar_url && (
+                    isGhost ? 'bg-muted text-muted-foreground' :
+                    rank === 1 ? 'bg-yellow-400/20 text-yellow-600 dark:text-yellow-400' :
+                    rank === 2 ? 'bg-slate-400/20 text-slate-600 dark:text-slate-300' :
+                    rank === 3 ? 'bg-amber-600/20 text-amber-700 dark:text-amber-500' :
+                    tone.fallback
+                  ),
+                  !log && !isGhost && 'animate-pulse'
+                )}>
+                  {profile.avatar_url ? (
+                    <img src={profile.avatar_url} alt={displayName} referrerPolicy="no-referrer" className="h-full w-full object-cover" />
+                  ) : (
+                    initials
+                  )}
+                </div>
+              )}
+              <RankBadge rank={rank} />
+              {!log && !isGhost && (
+                <div className="absolute right-0 top-0 h-2 w-2 rounded-full bg-[var(--status-rose-dot)] animate-pulse ring-2 ring-card" />
+              )}
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col justify-center gap-1">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <CardTitle className={cn(
+                  'truncate text-[12px] font-semibold leading-none tracking-tight sm:text-[13px]',
+                  isGhost ? 'text-muted-foreground' : 'text-foreground/95'
+                )} title={profile.email}>
+                  {displayName}
+                </CardTitle>
+                {(isOwn || isGhost) && (
+                  <Badge className={cn(
+                    'inline-flex h-4.5 shrink-0 items-center justify-center rounded-full px-1.5 py-0 text-[9px] font-medium uppercase tracking-wide shadow-none',
+                    isGhost
+                      ? 'border border-dashed border-border bg-transparent text-muted-foreground/80'
+                      : 'border border-foreground/15 bg-foreground/[0.06] text-muted-foreground'
+                  )}>
+                    {t('you')}
+                  </Badge>
+                )}
+              </div>
+              <div className={cn('flex min-h-0 items-center gap-1.5', isOwn ? 'justify-between' : 'justify-start')}>
+                {isOwn ? (
+                  <Select
+                    value={log?.status ? normalizeWorkStatus(log.status) : undefined}
+                    onValueChange={(value) => handleStatusChange(value as WorkStatus)}
+                  >
+                    <SelectTrigger className={cn(
+                      `${STATUS_CHIP_BASE} !h-5.5 !min-h-0 w-fit max-w-[8.5rem] !rounded-full !py-0 !pl-2 !pr-1.5 !text-[10px] !leading-none focus:ring-0 [&_svg]:size-3 [&_svg]:text-current/70 cursor-pointer`,
+                      log
+                        ? `${tone.bg} ${tone.text} border-0`
+                        : 'border-0 bg-[var(--status-rose-bg)]/20 text-[var(--status-rose-text)] animate-pulse'
+                    )}>
+                      <div className="flex items-center gap-1 truncate">
+                        {log?.status && (
+                          <span className={cn('h-2 w-2 rounded-full shrink-0', STATUS_DOT_COLORS[normalizeWorkStatus(log.status)])} />
+                        )}
+                        <span className="truncate">{log ? getStatusLabel(log.status, t) : t('setStatus')}</span>
+                      </div>
+                    </SelectTrigger>
+                    <SelectContent alignItemWithTrigger={false} sideOffset={6} className="bg-card border-border rounded-xl p-1">
+                      {(['in_office', 'wfh', 'off'] as WorkStatus[]).map((status) => (
+                        <SelectItem key={status} value={status} className="rounded-lg focus:bg-muted cursor-pointer">
+                          <div className="flex items-center gap-2.5">
+                            <span className={cn('h-2.5 w-2.5 rounded-full shrink-0', STATUS_DOT_COLORS[status])} />
+                            <span className="font-medium">{getStatusLabel(status, t)}</span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : !log ? (
+                  <Badge className={cn(
+                    STATUS_CHIP_BASE,
+                    'h-5.5 gap-1.5 bg-[var(--status-rose-bg)]/20 text-[var(--status-rose-text)] animate-pulse ring-1 ring-[var(--status-rose-border)]/30'
+                  )}>
+                    <span className="h-2 w-2 rounded-full bg-[var(--status-rose-dot)]" />
+                    {t('notLogged')}
+                  </Badge>
+                ) : (
+                  <Badge className={cn(
+                    STATUS_CHIP_BASE,
+                    'h-5.5 gap-1.5',
+                    tone.bg,
+                    tone.text,
+                    isGhost && 'opacity-80'
+                  )}>
+                    <span className={cn('h-2 w-2 rounded-full', STATUS_DOT_COLORS[normalizeWorkStatus(log.status)])} />
+                    {getStatusLabel(log.status, t)}
+                  </Badge>
+                )}
+                {isOwn && saveStatusText && (
+                  <span className={`ml-auto text-[10px] font-medium tabular-nums whitespace-nowrap ${getSaveStatusColor()}`}>
+                    {saveStatusText}
+                  </span>
+                )}
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="relative z-10 flex min-h-0 flex-1 flex-col px-3.5 pb-3 pt-1">
+            <ScrollFade deps={[inputValue, log?.activities]}>
+              {({ ref, onScroll, className }) => isOwn ? (
+                <div ref={ref as React.RefObject<HTMLDivElement>} onScroll={onScroll} className={cn(className, "w-full min-h-0")}>
+                  <ChecklistEditor
+                    value={inputValue}
+                    onChange={(v) => {
+                      inputValueRef.current = v
+                      setInputValue(v)
+                      shouldUpdateInputRef.current = false
+                    }}
+                    onSave={(v) => {
+                      inputValueRef.current = v
+                      void save(v)
+                    }}
+                    placeholder={t('whatAreYouWorkingOnToday')}
+                  />
+                </div>
+              ) : (
+                <div ref={ref as React.RefObject<HTMLDivElement>} onScroll={onScroll} className={cn(className, "min-h-0", isGhost && "pointer-events-none")}>
+                  <ChecklistViewer
+                    value={log?.activities ?? ''}
+                    emptyText={t('noTasksLoggedYet')}
+                  />
+                </div>
+              )}
+            </ScrollFade>
+          </CardContent>
+        </Card>
+      </motion.div>
+    )
+  }
 
   return (
     <div className="p-3 md:p-4 pr-12 md:pr-14 w-full max-w-[1800px] mx-auto">
-      <div className="mb-4 md:mb-6 flex items-center gap-2">
-        <div className="h-4 w-1 bg-primary rounded-full" />
-        <h2 className="text-sm font-bold tracking-tight">{t('teamDailyTasks')}</h2>
-        <button
-          onClick={openLeaderboard}
-          className="ml-2 flex items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-semibold text-primary hover:bg-primary/20 transition-colors"
-        >
-          <Trophy className="h-3 w-3" />
-          {t('monthlyLeadership')}
-        </button>
-      </div>
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3">
-        {orderedProfiles.map((profile) => {
-          const log = logs.find((l) => l.user_id === profile.id)
-          const isOwn = currentUserId === profile.id
-          const displayName = profile.name || profile.email.split('@')[0]
-          const initials = getInitials(profile.name ?? profile.email)
-          const tone = STATUS_COLORS[getStatusTone(log?.status ?? null)]
-          const saveStatusText = isOwn ? getSaveStatusText() : null
-          
-          const rankIndex = rankedProfiles.findIndex((p) => p.id === profile.id)
-          const rank = rankIndex !== -1 ? rankIndex + 1 : null
+      <div className="flex flex-col gap-6 md:gap-8">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-stretch lg:gap-0">
+          {ownItem && (
+            <section className="flex w-full shrink-0 flex-col gap-2.5 lg:w-[340px] lg:pr-5">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
+                {t('yourTasks')}
+              </h3>
+              <div className="flex min-h-0 flex-1 flex-col">
+                {renderCard(ownItem)}
+              </div>
+            </section>
+          )}
 
-          return (
-            <motion.div
-              key={profile.id}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              whileHover={{ y: -2 }}
-              transition={{ type: 'spring', stiffness: 300, damping: 24 }}
+          <section className="flex min-w-0 flex-1 flex-col gap-2.5 lg:border-l lg:border-border/40 lg:pl-5">
+            <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {t('teamStatus')}
+            </h3>
+            <StatusSummaryCards
+              initialProfiles={initialProfiles}
+              logs={logs}
+              className="min-w-0 flex-1"
+            />
+          </section>
+        </div>
+
+        <section className="flex flex-col gap-2.5 border-t border-border/30 pt-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {t('team')}
+            </h3>
+            <button
+              onClick={openLeaderboard}
+              className="flex items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-semibold text-primary hover:bg-primary/20 transition-colors"
             >
-              <Card className={cn(
-                'group relative grid h-[210px] min-h-0 w-full grid-rows-[3.7rem_minmax(0,1fr)] overflow-hidden border bg-card/85 py-0 shadow-sm transition-all duration-300 hover:shadow-lg gap-0',
-                tone.border,
-                isOwn && 'shadow-primary/10',
-                rank === 1 && 'shadow-yellow-400/20 shadow-md',
-                rank === 2 && 'shadow-slate-400/20 shadow-md',
-                rank === 3 && 'shadow-amber-600/20 shadow-md'
-                )} size="sm">
-                <CardHeader className={cn(
-                  "relative z-10 flex h-full flex-row items-center gap-2.5 px-3.5 py-2",
-                  rank === 1 ? "bg-gradient-to-r from-yellow-400/10 to-transparent" :
-                  rank === 2 ? "bg-gradient-to-r from-slate-400/10 to-transparent" :
-                  rank === 3 ? "bg-gradient-to-r from-amber-600/10 to-transparent" :
-                  "bg-muted/15"
-                )}>
-                  <div className="relative shrink-0">
-                    {isOwn ? (
-                      <button
-                        type="button"
-                        onClick={onEditProfile}
-                        title={t('editProfile')}
-                        className={cn(
-                          'group/avatar flex h-8.5 w-8.5 shrink-0 items-center justify-center overflow-hidden rounded-full ring-1.5 shadow-sm text-xs font-medium cursor-pointer',
-                          rank === 1 ? 'ring-yellow-400/80' :
-                          rank === 2 ? 'ring-slate-400/80' :
-                          rank === 3 ? 'ring-amber-600/80' :
-                          tone.ring,
-                          !profile.avatar_url && (
-                            rank === 1 ? 'bg-yellow-400/20 text-yellow-600 dark:text-yellow-400' :
-                            rank === 2 ? 'bg-slate-400/20 text-slate-600 dark:text-slate-300' :
-                            rank === 3 ? 'bg-amber-600/20 text-amber-700 dark:text-amber-500' :
-                            tone.fallback
-                          ),
-                          !log && 'animate-pulse'
-                        )}
-                      >
-                        {profile.avatar_url ? (
-                          <img src={profile.avatar_url} alt={displayName} referrerPolicy="no-referrer" className="h-full w-full object-cover" />
-                        ) : (
-                          initials
-                        )}
-                        <span className="absolute inset-0 hidden items-center justify-center bg-black/50 text-white group-hover/avatar:flex">
-                          <Camera className="h-3.5 w-3.5" />
-                        </span>
-                      </button>
-                    ) : (
-                      <div className={cn(
-                        'flex h-8.5 w-8.5 shrink-0 items-center justify-center overflow-hidden rounded-full ring-1.5 shadow-sm text-xs font-medium',
-                        rank === 1 ? 'ring-yellow-400/80' :
-                        rank === 2 ? 'ring-slate-400/80' :
-                        rank === 3 ? 'ring-amber-600/80' :
-                        tone.ring,
-                        !profile.avatar_url && (
-                          rank === 1 ? 'bg-yellow-400/20 text-yellow-600 dark:text-yellow-400' :
-                          rank === 2 ? 'bg-slate-400/20 text-slate-600 dark:text-slate-300' :
-                          rank === 3 ? 'bg-amber-600/20 text-amber-700 dark:text-amber-500' :
-                          tone.fallback
-                        ),
-                        !log && 'animate-pulse'
-                      )}>
-                        {profile.avatar_url ? (
-                          <img src={profile.avatar_url} alt={displayName} referrerPolicy="no-referrer" className="h-full w-full object-cover" />
-                        ) : (
-                          initials
-                        )}
-                      </div>
-                    )}
-                    <RankBadge rank={rank} />
-                    {!log && (
-                      <div className="absolute right-0 top-0 h-2 w-2 rounded-full bg-[var(--status-rose-dot)] animate-pulse ring-2 ring-card" />
-                    )}
-                  </div>
-                  <div className="flex min-w-0 flex-1 flex-col justify-center gap-1">
-                    <div className="flex min-w-0 items-center gap-1.5">
-                      <CardTitle className="truncate text-[12px] font-semibold leading-none tracking-tight text-foreground/95 sm:text-[13px]" title={profile.email}>
-                        {displayName}
-                      </CardTitle>
-                      {isOwn && (
-                        <Badge className="inline-flex h-5 shrink-0 items-center justify-center rounded-full border-0 bg-primary/90 px-2 py-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-primary-foreground shadow-none">
-                          {t('you')}
-                        </Badge>
-                      )}
-                    </div>
-                    <div className={cn('flex min-h-0 items-center gap-1.5', isOwn ? 'justify-between' : 'justify-start')}>
-                      {isOwn ? (
-                        <Select
-                          value={log?.status ?? undefined}
-                          onValueChange={(value) => handleStatusChange(value as WorkStatus)}
-                        >
-                          <SelectTrigger className={cn(
-                            `${STATUS_CHIP_BASE} !h-5.5 !min-h-0 w-fit max-w-[8.5rem] !rounded-full !py-0 !pl-2 !pr-1.5 !text-[10px] !leading-none focus:ring-0 [&_svg]:size-3 [&_svg]:text-current/70 cursor-pointer`,
-                            log
-                              ? `${tone.bg} ${tone.text} border-0`
-                              : 'border-0 bg-[var(--status-rose-bg)]/20 text-[var(--status-rose-text)] animate-pulse'
-                          )}>
-                            <div className="flex items-center gap-1 truncate">
-                              {log?.status && (
-                                <span className={cn('h-2 w-2 rounded-full shrink-0', STATUS_DOT_COLORS[log.status])} />
-                              )}
-                              <span className="truncate">{log ? getStatusLabel(log.status, t) : t('setStatus')}</span>
-                            </div>
-                          </SelectTrigger>
-                          <SelectContent alignItemWithTrigger={false} sideOffset={6} className="bg-card border-border rounded-xl p-1">
-                            {(['in_office', 'wfh', 'off', 'sick', 'vacation'] as WorkStatus[]).map((status) => (
-                              <SelectItem key={status} value={status} className="rounded-lg focus:bg-muted cursor-pointer">
-                                <div className="flex items-center gap-2.5">
-                                  <span className={cn('h-2.5 w-2.5 rounded-full shrink-0', STATUS_DOT_COLORS[status])} />
-                                  <span className="font-medium">{getStatusLabel(status, t)}</span>
-                                </div>
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      ) : !log ? (
-                        <Badge className={cn(
-                          STATUS_CHIP_BASE,
-                          'h-5.5 gap-1.5 bg-[var(--status-rose-bg)]/20 text-[var(--status-rose-text)] animate-pulse ring-1 ring-[var(--status-rose-border)]/30'
-                        )}>
-                          <span className="h-2 w-2 rounded-full bg-[var(--status-rose-dot)]" />
-                          {t('notLogged')}
-                        </Badge>
-                      ) : (
-                        <Badge className={cn(STATUS_CHIP_BASE, 'h-5.5 gap-1.5', tone.bg, tone.text)}>
-                          <span className={cn('h-2 w-2 rounded-full', STATUS_DOT_COLORS[log.status])} />
-                          {getStatusLabel(log.status, t)}
-                        </Badge>
-                      )}
-                      {isOwn && saveStatusText && (
-                        <span className={`ml-auto text-[10px] font-medium tabular-nums whitespace-nowrap ${getSaveStatusColor()}`}>
-                          {saveStatusText}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="relative z-10 flex min-h-0 flex-1 flex-col px-3.5 pb-3 pt-1">
-                  <ScrollFade deps={[inputValue, log?.activities]}>
-                    {({ ref, onScroll, className }) => isOwn ? (
-                      <div ref={ref as React.RefObject<HTMLDivElement>} onScroll={onScroll} className={cn(className, "w-full min-h-0")}>
-                        <ChecklistEditor
-                          value={inputValue}
-                          onChange={(v) => {
-                            inputValueRef.current = v
-                            setInputValue(v)
-                            shouldUpdateInputRef.current = false
-                          }}
-                          onSave={(v) => {
-                            inputValueRef.current = v
-                            void save(v)
-                          }}
-                          placeholder={t('whatAreYouWorkingOnToday')}
-                        />
-                      </div>
-                    ) : (
-                      <div ref={ref as React.RefObject<HTMLDivElement>} onScroll={onScroll} className={cn(className, "min-h-0")}>
-                        <ChecklistViewer 
-                          value={log?.activities ?? ''} 
-                          emptyText={t('noTasksLoggedYet')}
-                        />
-                      </div>
-                    )}
-                  </ScrollFade>
-                </CardContent>
-              </Card>
-            </motion.div>
-          )
-        })}
+              <Trophy className="h-3 w-3" />
+              {t('monthlyLeadership')}
+            </button>
+            {monthlyWinner && (
+              <span className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
+                <Crown className="h-3 w-3 text-amber-500" />
+                <span className="text-amber-600 dark:text-amber-400">
+                  {monthlyWinner.name || monthlyWinner.email.split('@')[0]}
+                </span>
+              </span>
+            )}
+          </div>
+          {teamItems.length > 0 ? (
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3">
+              {teamItems.map((item) => renderCard(item))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">{t('noTasksLoggedYet')}</p>
+          )}
+        </section>
       </div>
 
       <AnimatePresence>

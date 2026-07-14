@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight, X, CheckCheck, Eraser, PanelRightOpen, ListT
 import { createClient } from '@/app/utils/supabase/client'
 import { cn } from '@/lib/utils'
 import type { DailyLog, WorkStatus } from '@/types/supabase'
+import { normalizeWorkStatus } from '@/types/supabase'
 import { useLocale } from '@/app/components/locale-provider'
 import type { TranslationKey } from '@/app/components/locale-provider'
 import { ChecklistEditor, parseChecklist, serializeChecklist, hasChecklistItems } from './Checklist'
@@ -19,18 +20,13 @@ const STATUS_DOT: Record<WorkStatus, string> = {
   in_office: 'bg-[var(--status-emerald-dot)]',
   wfh: 'bg-[var(--status-sky-dot)]',
   off: 'bg-[var(--status-zinc-dot)]',
-  sick: 'bg-amber-400',
-  vacation: 'bg-violet-400',
 }
 
 const getStatusLabel = (status: WorkStatus, t: (key: TranslationKey) => string) => {
-  switch (status) {
+  switch (normalizeWorkStatus(status)) {
     case 'in_office': return t('statusInOffice')
     case 'wfh': return t('statusWfh')
     case 'off': return t('statusOff')
-    case 'sick': return t('statusSick')
-    case 'vacation': return t('statusVacation')
-    default: return t('statusOff')
   }
 }
 
@@ -283,7 +279,7 @@ export default function MyMonthDrawer({ currentUserId, date }: Props) {
                           <div className="mb-2 flex items-center gap-2">
                             <span className="text-sm font-semibold text-primary">{dateLabel}</span>
                             <span className="flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-                              <span className={cn('h-1.5 w-1.5 rounded-full', STATUS_DOT[log.status])} />
+                              <span className={cn('h-1.5 w-1.5 rounded-full', STATUS_DOT[normalizeWorkStatus(log.status)])} />
                               {getStatusLabel(log.status, t)}
                             </span>
                             <div className="h-px flex-1 bg-border" />

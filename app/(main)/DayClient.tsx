@@ -84,7 +84,6 @@ export default function DayClient({ date, initialProfiles, initialLogs }: Props)
       <TopDashboard
         date={date}
         initialProfiles={initialProfiles}
-        logs={logs}
         onEditProfile={openEdit}
       />
       <DailyLogs

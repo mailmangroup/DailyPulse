@@ -8,7 +8,7 @@
 -- ============================================================================
 
 -- Create status enum (add more if needed)
-create type work_status as enum ('in_office', 'wfh', 'off', 'sick', 'vacation');
+create type work_status as enum ('in_office', 'wfh', 'off');
 
 -- ── Tables ──────────────────────────────────────────────────────────────────
 

@@ -1,4 +1,10 @@
-export type WorkStatus = 'in_office' | 'wfh' | 'off' | 'sick' | 'vacation'
+export type WorkStatus = 'in_office' | 'wfh' | 'off'
+
+/** Map legacy sick/vacation rows to off (On Leave) until migration 007 is applied. */
+export function normalizeWorkStatus(status: string): WorkStatus {
+  if (status === 'in_office' || status === 'wfh' || status === 'off') return status
+  return 'off'
+}
 
 export interface Profile {
   id: string

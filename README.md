@@ -5,7 +5,7 @@ A daily team status tracker — see who's in, WFH, or out, leave daily logs and 
 ## Features
 
 ### Daily Status & Logs
-- Each team member sets their daily status: **In Office**, **WFH**, **Off**, **Sick**, or **Vacation**
+- Each team member sets their daily status: **In Office**, **WFH**, or **On Leave**
 - Attach a checklist of activities to your daily log — editable inline, auto-saved to Supabase
 - Read-only checklist view for other team members' logs
 - Live updates via Supabase Realtime — no refresh needed
@@ -76,7 +76,7 @@ app/
   components/       # Shared page-level components
     DailyLogs.tsx       # Team status cards with ranking, logs, and checklists
     DayPanel.tsx        # Left sidebar with date nav, monthly overview, and quick-fill
-    TopDashboard.tsx    # Sticky header with status summary and warnings
+    TopDashboard.tsx    # Sticky header with date and user controls
     MyMonthDrawer.tsx   # Personal month history drawer
     Checklist.tsx       # Checklist editor/viewer
     ActiveDayReminder.tsx

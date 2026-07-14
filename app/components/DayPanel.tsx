@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { createClient } from '@/app/utils/supabase/client'
 import { useLocale } from '@/app/components/locale-provider'
 import type { DailyLog, Profile, WorkStatus } from '@/types/supabase'
+import { normalizeWorkStatus } from '@/types/supabase'
 import {
   Select,
   SelectContent,
@@ -591,7 +592,7 @@ export default function DayPanel() {
                             </div>
                             <div className="mt-3">
                               <Select
-                                value={log?.status ?? ''}
+                                value={log?.status ? normalizeWorkStatus(log.status) : ''}
                                 onValueChange={(value) => handleQuickStatusChange(dateStr, value as WorkStatus)}
                               >
                                 <SelectTrigger className={cn(
@@ -605,10 +606,8 @@ export default function DayPanel() {
                                           in_office: t('statusInOffice'),
                                           wfh: t('statusWfh'),
                                           off: t('statusOff'),
-                                          sick: t('statusSick'),
-                                          vacation: t('statusVacation'),
                                         }
-                                        return labels[log.status]
+                                        return labels[normalizeWorkStatus(log.status)]
                                       })()
                                     ) : (
                                       t('setStatus')
@@ -619,8 +618,6 @@ export default function DayPanel() {
                                   <SelectItem value="in_office" className="rounded-lg focus:bg-muted cursor-pointer text-xs">{t('statusInOffice')}</SelectItem>
                                   <SelectItem value="wfh" className="rounded-lg focus:bg-muted cursor-pointer text-xs">{t('statusWfh')}</SelectItem>
                                   <SelectItem value="off" className="rounded-lg focus:bg-muted cursor-pointer text-xs">{t('statusOff')}</SelectItem>
-                                  <SelectItem value="sick" className="rounded-lg focus:bg-muted cursor-pointer text-xs">{t('statusSick')}</SelectItem>
-                                  <SelectItem value="vacation" className="rounded-lg focus:bg-muted cursor-pointer text-xs">{t('statusVacation')}</SelectItem>
                                 </SelectContent>
                               </Select>
                             </div>

@@ -17,6 +17,12 @@ export type TranslationKey =
   | 'entries'
   | 'logged'
   | 'teamDailyTasks'
+  | 'teamStatus'
+  | 'yourTasks'
+  | 'team'
+  | 'noTasksYet'
+  | 'showAllStatuses'
+  | 'editInYourTasks'
   | 'you'
   | 'setStatus'
   | 'notLogged'
@@ -31,15 +37,9 @@ export type TranslationKey =
   | 'editDisplayName'
   | 'setName'
   | 'signOut'
-  | 'warning'
-  | 'teamMember'
-  | 'teamMembers'
-  | 'withoutTasks'
   | 'statusInOffice'
   | 'statusWfh'
   | 'statusOff'
-  | 'statusSick'
-  | 'statusVacation'
 
   | 'monthlyLeadership'
   | 'leaderboardCondition'
@@ -98,7 +98,7 @@ const messages: Record<AppLocale, Record<TranslationKey, string>> = {
     ptsAdded: 'Rank {rank}! +{score} pts for Monthly Leadership 🎊',
     notLoggedBoard: 'Not Logged',
     missedDays: 'days not logged',
-    quickFillHint: 'Keep your status up to date so teammates know your working situation — even for vacation or time off. Use Quick Fill in the sidebar to set it in bulk.',
+    quickFillHint: 'Keep your status up to date so teammates know your working situation — even when you are on leave. Use Quick Fill in the sidebar to set it in bulk.',
     overview: 'Overview',
     unknown: 'Unknown',
     monthlyOverview: 'Monthly Overview',
@@ -111,6 +111,12 @@ const messages: Record<AppLocale, Record<TranslationKey, string>> = {
     entries: 'entries',
     logged: 'logged',
     teamDailyTasks: 'Team Daily Tasks',
+    teamStatus: 'Team status',
+    yourTasks: 'Your tasks',
+    team: 'Team',
+    noTasksYet: 'No tasks yet',
+    showAllStatuses: 'Show all',
+    editInYourTasks: 'Edit in Your tasks',
     you: 'You',
     setStatus: 'Set status',
     notLogged: 'Not Logged',
@@ -125,15 +131,9 @@ const messages: Record<AppLocale, Record<TranslationKey, string>> = {
     editDisplayName: 'Edit display name',
     setName: 'Set name',
     signOut: 'Sign out',
-    warning: 'Warning',
-    teamMember: 'team member',
-    teamMembers: 'team members',
-    withoutTasks: 'without tasks',
     statusInOffice: 'In Office',
     statusWfh: 'Work From Home',
-    statusOff: 'Off',
-    statusSick: 'Sick',
-    statusVacation: 'Vacation',
+    statusOff: 'On Leave',
   },
   zh: {
     editProfile: '编辑资料',
@@ -161,7 +161,7 @@ const messages: Record<AppLocale, Record<TranslationKey, string>> = {
     ptsAdded: '第 {rank} 名！月度榜单 +{score} 分 撒花~ 🎊',
     notLoggedBoard: '未打卡',
     missedDays: '天未打卡',
-    quickFillHint: '更新状态让同事随时了解你的工作安排，休假或请假也记得打卡哦～使用侧边栏的快速更新可批量设置。',
+    quickFillHint: '更新状态让同事随时了解你的工作安排，休假也记得打卡哦～使用侧边栏的快速更新可批量设置。',
     overview: '月度概览',
     unknown: '未知',
     monthlyOverview: '月度总览',
@@ -174,6 +174,12 @@ const messages: Record<AppLocale, Record<TranslationKey, string>> = {
     entries: '条记录',
     logged: '已记录',
     teamDailyTasks: '团队每日任务',
+    teamStatus: '团队状态',
+    yourTasks: '你的任务',
+    team: '团队',
+    noTasksYet: '尚未填写任务',
+    showAllStatuses: '显示全部',
+    editInYourTasks: '在「你的任务」中编辑',
     you: '你',
     setStatus: '设置状态',
     notLogged: '未打卡',
@@ -188,15 +194,9 @@ const messages: Record<AppLocale, Record<TranslationKey, string>> = {
     editDisplayName: '编辑显示名称',
     setName: '设置名称',
     signOut: '退出登录',
-    warning: '警告',
-    teamMember: '位成员',
-    teamMembers: '位成员',
-    withoutTasks: '未填写任务',
     statusInOffice: '在办公室',
     statusWfh: '远程办公',
-    statusOff: '休息',
-    statusSick: '病假',
-    statusVacation: '休假',
+    statusOff: '休假',
   },
 }
 
