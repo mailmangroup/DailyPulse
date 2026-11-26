@@ -1,9 +1,11 @@
 'use client'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createClient } from '@/app/utils/supabase/client'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { cn, getInitials } from '@/lib/utils'
+import { hasChecklistItems, normalizeChecklistValue } from '@/lib/checklist'
+import { createChecklistSyncController } from '@/lib/checklist-save-sync'
 import type { Profile, DailyLog, WorkStatus } from '@/types/supabase'
 import { normalizeWorkStatus } from '@/types/supabase'
 import { useLocale } from '@/app/components/locale-provider'
@@ -16,7 +18,7 @@ import {
 } from '@/components/ui/select'
 
 import { motion, AnimatePresence } from 'framer-motion'
-import { Trophy, Medal, X, Info, ChevronDown, Camera, Crown } from 'lucide-react'
+import { Trophy, Medal, X, Info, ChevronDown, Camera, Crown, Copy, Check } from 'lucide-react'
 import confetti from 'canvas-confetti'
 
 import { ChecklistEditor, ChecklistViewer } from './Checklist'
@@ -217,14 +219,28 @@ function ScrollFade({ children, deps = [] }: { children: (props: { ref: React.Re
 
 export default function DailyLogs({ date, initialProfiles, logs, onLogUpsert, onEditProfile }: Props) {
   const { t } = useLocale()
-  const supabase = createClient()
+  const [supabase] = useState(() => createClient())
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [inputValue, setInputValue] = useState('')
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [gamificationMessage, setGamificationMessage] = useState<string | null>(null)
+  const [copiedOwnTasks, setCopiedOwnTasks] = useState(false)
   const inputValueRef = useRef('')
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  const shouldUpdateInputRef = useRef(true)
+  const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const syncControllerRef = useRef<ReturnType<typeof createChecklistSyncController> | null>(null)
+  const contextKeyRef = useRef<string | null>(null)
+  const latestLogRef = useRef<DailyLog | undefined>(undefined)
+  const logsRef = useRef<DailyLog[]>(logs)
+
+  const getSyncController = useCallback(() => {
+    if (!syncControllerRef.current) {
+      syncControllerRef.current = createChecklistSyncController({
+        normalize: normalizeChecklistValue,
+      })
+    }
+    return syncControllerRef.current
+  }, [])
 
   const [leaderboardOpen, setLeaderboardOpen] = useState(false)
   const [leaderboardLoading, setLeaderboardLoading] = useState(false)
@@ -272,20 +288,41 @@ export default function DailyLogs({ date, initialProfiles, logs, onLogUpsert, on
     })
   }, [supabase])
 
-  // Update input value when current user changes or logs update
+  // Update input value when current user, date, or logs update (never clobber unsaved/in-flight edits)
   useEffect(() => {
-    if (currentUserId && shouldUpdateInputRef.current) {
-      const log = logs.find((l) => l.user_id === currentUserId)
-      const next = log?.activities ?? ''
-      setInputValue(next)
-      inputValueRef.current = next
+    logsRef.current = logs
+    if (!currentUserId) return
+
+    const ownLog = logs.find((l) => l.user_id === currentUserId)
+    latestLogRef.current = ownLog
+
+    const controller = getSyncController()
+    const nextContextKey = `${currentUserId}:${date}`
+    const serverActivities = ownLog?.activities ?? ''
+
+    if (contextKeyRef.current !== nextContextKey) {
+      contextKeyRef.current = nextContextKey
+      const { nextValue } = controller.resetContext(nextContextKey, serverActivities)
+      setInputValue(nextValue)
+      inputValueRef.current = nextValue
+      setSaveStatus('idle')
+      return
     }
-  }, [currentUserId, logs])
+
+    const sync = controller.onServerSync(serverActivities)
+    if (sync.shouldUpdateInput && sync.nextValue !== undefined) {
+      setInputValue(sync.nextValue)
+      inputValueRef.current = sync.nextValue
+    }
+  }, [currentUserId, date, logs, getSyncController])
 
   useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current)
+      }
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current)
       }
     }
   }, [])
@@ -322,7 +359,7 @@ export default function DailyLogs({ date, initialProfiles, logs, onLogUpsert, on
       origin: { y: 0.6 }
     })
 
-    const otherLogs = logs.filter(l => l.id !== logData.id && !!l.activities)
+    const otherLogs = logsRef.current.filter(l => l.id !== logData.id && !!l.activities)
     let myRank = 1
     const myTime = new Date(logData.activities_at ?? logData.created_at).getTime()
     otherLogs.forEach(l => {
@@ -337,63 +374,109 @@ export default function DailyLogs({ date, initialProfiles, logs, onLogUpsert, on
 
   const save = async (activitiesOverride?: string) => {
     if (!currentUserId) return
+    const targetUserId = currentUserId
+    const targetDate = date
     const activities = activitiesOverride ?? inputValueRef.current
+    const controller = getSyncController()
 
-    shouldUpdateInputRef.current = false
-    setSaveStatus('saving')
-    const log = logs.find((l) => l.user_id === currentUserId)
+    await controller.requestSave(
+      activities,
+      async (valueToSave, isCurrent) => {
+        const existingLog = latestLogRef.current
+        const log =
+          existingLog &&
+          existingLog.date === targetDate &&
+          existingLog.user_id === targetUserId
+            ? existingLog
+            : undefined
 
-    try {
-      if (log) {
-        const now = new Date().toISOString()
-        const isNewActivity = !!activities && !log.activities_at
-        const { data } = await supabase
-          .from('daily_logs')
-          .update({
-            activities,
-            updated_at: now,
-            ...(isNewActivity ? { activities_at: now } : {}),
-          })
-          .eq('id', log.id)
-          .select()
-          .single()
-        if (data) {
-          onLogUpsert(data)
-          setSaveStatus('saved')
-          if (isNewActivity) triggerGamification(data, true)
+        try {
+          if (log) {
+            const now = new Date().toISOString()
+            const isNewActivity = !!valueToSave && !log.activities_at
+            const { data, error } = await supabase
+              .from('daily_logs')
+              .update({
+                activities: valueToSave,
+                updated_at: now,
+                ...(isNewActivity ? { activities_at: now } : {}),
+              })
+              .eq('id', log.id)
+              .select()
+              .single()
+
+            if (error || !data) {
+              console.error('Save error:', error)
+              return false
+            }
+
+            if (isCurrent()) {
+              latestLogRef.current = data
+              onLogUpsert(data)
+              if (isNewActivity) triggerGamification(data, true)
+            }
+            return true
+          }
+
+          const now = new Date().toISOString()
+          const isNewActivity = !!valueToSave
+          const { data, error } = await supabase
+            .from('daily_logs')
+            .upsert(
+              {
+                user_id: targetUserId,
+                date: targetDate,
+                activities: valueToSave,
+                ...(isNewActivity ? { activities_at: now } : {}),
+              },
+              { onConflict: 'user_id,date' }
+            )
+            .select()
+            .single()
+
+          if (error || !data) {
+            console.error('Save error:', error)
+            return false
+          }
+
+          if (isCurrent()) {
+            latestLogRef.current = data
+            onLogUpsert(data)
+            if (isNewActivity) triggerGamification(data, true)
+          }
+          return true
+        } catch (error) {
+          console.error('Save error:', error)
+          return false
         }
-      } else {
-        const now = new Date().toISOString()
-        const isNewActivity = !!activities
-        const { data } = await supabase
-          .from('daily_logs')
-          .upsert(
-            { user_id: currentUserId, date, activities, ...(isNewActivity ? { activities_at: now } : {}) },
-            { onConflict: 'user_id,date' }
-          )
-          .select()
-          .single()
-        if (data) {
-          onLogUpsert(data)
-          setSaveStatus('saved')
-          if (isNewActivity) triggerGamification(data, true)
+      },
+      (status) => {
+        setSaveStatus(status)
+        if (saveTimeoutRef.current) {
+          clearTimeout(saveTimeoutRef.current)
+          saveTimeoutRef.current = null
+        }
+        if (status === 'saved' || status === 'error') {
+          saveTimeoutRef.current = setTimeout(() => {
+            setSaveStatus('idle')
+            setGamificationMessage(null)
+          }, 4000)
         }
       }
-    } catch (error) {
-      console.error('Save error:', error)
-      setSaveStatus('error')
-    } finally {
-      shouldUpdateInputRef.current = true
-    }
+    )
+  }
 
-    // Reset status after 3 seconds
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current)
+  const handleCopyOwnTasks = async () => {
+    const text = normalizeChecklistValue(inputValueRef.current)
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedOwnTasks(true)
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current)
+      copyTimeoutRef.current = setTimeout(() => setCopiedOwnTasks(false), 1500)
+    } catch (error) {
+      console.error('Copy error:', error)
     }
-    saveTimeoutRef.current = setTimeout(() => {
-      setSaveStatus('idle')
-      setGamificationMessage(null)
-    }, 4000)
   }
 
 
@@ -657,10 +740,11 @@ export default function DailyLogs({ date, initialProfiles, logs, onLogUpsert, on
                     onChange={(v) => {
                       inputValueRef.current = v
                       setInputValue(v)
-                      shouldUpdateInputRef.current = false
+                      getSyncController().onLocalEdit(v)
                     }}
                     onSave={(v) => {
                       inputValueRef.current = v
+                      getSyncController().onLocalEdit(v)
                       void save(v)
                     }}
                     placeholder={t('whatAreYouWorkingOnToday')}
@@ -687,9 +771,27 @@ export default function DailyLogs({ date, initialProfiles, logs, onLogUpsert, on
         <div className="flex flex-col gap-4 lg:flex-row lg:items-stretch lg:gap-0">
           {ownItem && (
             <section className="flex w-full shrink-0 flex-col gap-2.5 lg:w-[340px] lg:pr-5">
-              <h3 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
-                {t('yourTasks')}
-              </h3>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
+                  {t('yourTasks')}
+                </h3>
+                {hasChecklistItems(inputValue) && (
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyOwnTasks()}
+                    title={t('copyTasks')}
+                    className={cn(
+                      'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer',
+                      copiedOwnTasks
+                        ? 'bg-[var(--status-emerald-bg)]/20 text-[var(--status-emerald-text)]'
+                        : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+                    )}
+                  >
+                    {copiedOwnTasks ? <Check className="h-2.5 w-2.5" /> : <Copy className="h-2.5 w-2.5" />}
+                    {copiedOwnTasks ? t('copied') : t('copyTasks')}
+                  </button>
+                )}
+              </div>
               <div className="flex min-h-0 flex-1 flex-col">
                 {renderCard(ownItem)}
               </div>

@@ -64,6 +64,8 @@ export type TranslationKey =
   | 'clearDay'
   | 'allDone'
   | 'noPersonalTasksThisMonth'
+  | 'copyTasks'
+  | 'copied'
 
   | 'editProfile'
   | 'changePhoto'
@@ -90,6 +92,8 @@ const messages: Record<AppLocale, Record<TranslationKey, string>> = {
     clearDay: 'Clear this day',
     allDone: 'All done',
     noPersonalTasksThisMonth: 'No tasks logged this month yet',
+    copyTasks: 'Copy tasks',
+    copied: 'Copied',
     monthlyLeadership: 'Monthly Leadership',
     leaderboardCondition: 'Only days with >5 members count',
     leaderboardScoreLogic: 'Score logic: For each valid day, 1st place gets {n} pts, 2nd gets {n_1} pts, etc. Unlogged users get 0 pts.',
@@ -153,6 +157,8 @@ const messages: Record<AppLocale, Record<TranslationKey, string>> = {
     clearDay: '清除当天勾选',
     allDone: '全部完成',
     noPersonalTasksThisMonth: '本月还没有任务记录',
+    copyTasks: '复制任务',
+    copied: '已复制',
     monthlyLeadership: '月度榜单',
     leaderboardCondition: '仅统计超过5人填写的日期',
     leaderboardScoreLogic: '积分规则：有效日期内，第1名得 {n} 分，第2名得 {n_1} 分，依此类推。未填写得 0 分。',

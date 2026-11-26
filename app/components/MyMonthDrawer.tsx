@@ -1,10 +1,12 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ChevronLeft, ChevronRight, X, CheckCheck, Eraser, PanelRightOpen, ListTodo } from 'lucide-react'
+import { ChevronLeft, ChevronRight, X, CheckCheck, Eraser, PanelRightOpen, ListTodo, Copy, Check } from 'lucide-react'
 import { createClient } from '@/app/utils/supabase/client'
 import { cn } from '@/lib/utils'
+import { normalizeChecklistValue } from '@/lib/checklist'
+import { createChecklistSyncController, type ChecklistSyncController } from '@/lib/checklist-save-sync'
 import type { DailyLog, WorkStatus } from '@/types/supabase'
 import { normalizeWorkStatus } from '@/types/supabase'
 import { useLocale } from '@/app/components/locale-provider'
@@ -37,9 +39,13 @@ const countTasks = (activities: string | null) => {
 
 export default function MyMonthDrawer({ currentUserId, date }: Props) {
   const { localeTag, t } = useLocale()
+  const [supabase] = useState(() => createClient())
   const [open, setOpen] = useState(false)
   const [logs, setLogs] = useState<DailyLog[]>([])
   const [loading, setLoading] = useState(false)
+  const [copiedLogId, setCopiedLogId] = useState<number | null>(null)
+  const syncControllersRef = useRef<Map<number, ChecklistSyncController>>(new Map())
+  const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   const base = useMemo(() => new Date(`${date}T00:00:00`), [date])
   const [viewYear, setViewYear] = useState(base.getFullYear())
@@ -51,10 +57,17 @@ export default function MyMonthDrawer({ currentUserId, date }: Props) {
     setViewMonth(base.getMonth())
   }, [base])
 
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current)
+      }
+    }
+  }, [])
+
   const load = useCallback(async () => {
     if (!currentUserId) return
     setLoading(true)
-    const supabase = createClient()
     const startDate = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-01`
     const endDate = new Date(viewYear, viewMonth + 1, 0).toLocaleDateString('en-CA')
     const { data } = await supabase
@@ -64,9 +77,21 @@ export default function MyMonthDrawer({ currentUserId, date }: Props) {
       .gte('date', startDate)
       .lte('date', endDate)
       .order('date', { ascending: false })
-    setLogs((data ?? []).filter((l) => hasChecklistItems(l.activities)))
+    const filtered = (data ?? []).filter((l) => hasChecklistItems(l.activities))
+    for (const existing of syncControllersRef.current.values()) {
+      existing.resetContext('invalidated', '')
+    }
+    syncControllersRef.current.clear()
+    for (const log of filtered) {
+      const controller = createChecklistSyncController({
+        normalize: normalizeChecklistValue,
+      })
+      controller.resetContext(String(log.id), log.activities)
+      syncControllersRef.current.set(log.id, controller)
+    }
+    setLogs(filtered)
     setLoading(false)
-  }, [currentUserId, viewYear, viewMonth])
+  }, [currentUserId, viewYear, viewMonth, supabase])
 
   useEffect(() => {
     if (open) void load()
@@ -82,24 +107,79 @@ export default function MyMonthDrawer({ currentUserId, date }: Props) {
     return () => window.removeEventListener('keydown', onKey)
   }, [open])
 
-  const persist = useCallback(async (logId: number, activities: string) => {
-    const supabase = createClient()
-    const { data } = await supabase
-      .from('daily_logs')
-      .update({ activities, updated_at: new Date().toISOString() })
-      .eq('id', logId)
-      .select()
-      .single()
-    if (data) setLogs((prev) => prev.map((l) => (l.id === data.id ? data : l)))
+  const handleDraftChange = useCallback((logId: number, activities: string) => {
+    const normalized = normalizeChecklistValue(activities)
+    let controller = syncControllersRef.current.get(logId)
+    if (!controller) {
+      controller = createChecklistSyncController({
+        normalize: normalizeChecklistValue,
+      })
+      syncControllersRef.current.set(logId, controller)
+    }
+    controller.onLocalEdit(normalized)
+    setLogs((prev) =>
+      prev.map((l) => (l.id === logId ? { ...l, activities: normalized } : l))
+    )
   }, [])
+
+  const persist = useCallback(async (logId: number, activities: string) => {
+    const normalized = normalizeChecklistValue(activities)
+    let controller = syncControllersRef.current.get(logId)
+    if (!controller) {
+      controller = createChecklistSyncController({
+        normalize: normalizeChecklistValue,
+      })
+      syncControllersRef.current.set(logId, controller)
+    }
+    controller.onLocalEdit(normalized)
+
+    await controller.requestSave(normalized, async (valueToSave, isCurrent) => {
+      const { data, error } = await supabase
+        .from('daily_logs')
+        .update({ activities: valueToSave, updated_at: new Date().toISOString() })
+        .eq('id', logId)
+        .select()
+        .single()
+
+      if (error || !data) {
+        console.error('Save error:', error)
+        return false
+      }
+
+      if (isCurrent()) {
+        const currentDraft = controller.getState().draftValue
+        const hasNewerDraft = currentDraft !== valueToSave
+        setLogs((prev) =>
+          prev.map((l) => {
+            if (l.id !== data.id) return l
+            return hasNewerDraft ? { ...data, activities: currentDraft } : data
+          })
+        )
+      }
+      return true
+    })
+  }, [supabase])
 
   const setDayChecked = useCallback(async (log: DailyLog, checked: boolean) => {
     const items = parseChecklist(log.activities ?? '').filter((i) => i.text.trim())
     const next = serializeChecklist(items.map((i) => ({ ...i, checked })))
     // Optimistic update so the UI (and the editor) reflect the change instantly.
-    setLogs((prev) => prev.map((l) => (l.id === log.id ? { ...l, activities: next } : l)))
+    handleDraftChange(log.id, next)
     await persist(log.id, next)
-  }, [persist])
+  }, [handleDraftChange, persist])
+
+  const handleCopyDay = useCallback(async (log: DailyLog) => {
+    const text = normalizeChecklistValue(log.activities)
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedLogId(log.id)
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current)
+      copyTimeoutRef.current = setTimeout(() => setCopiedLogId(null), 1500)
+    } catch (error) {
+      console.error('Copy error:', error)
+    }
+  }, [])
 
   const setAllChecked = useCallback(async (checked: boolean) => {
     const targets = logs.filter((l) => {
@@ -288,6 +368,24 @@ export default function MyMonthDrawer({ currentUserId, date }: Props) {
                             </span>
                             <div className="flex items-center gap-0.5">
                               <button
+                                type="button"
+                                onClick={() => void handleCopyDay(log)}
+                                disabled={total === 0}
+                                title={copiedLogId === log.id ? t('copied') : t('copyTasks')}
+                                className={cn(
+                                  'flex h-6 w-6 items-center justify-center rounded-md transition-colors disabled:opacity-30 disabled:hover:bg-transparent',
+                                  copiedLogId === log.id
+                                    ? 'text-[var(--status-emerald-text)] bg-[var(--status-emerald-bg)]/20'
+                                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                                )}
+                              >
+                                {copiedLogId === log.id ? (
+                                  <Check className="h-3.5 w-3.5" />
+                                ) : (
+                                  <Copy className="h-3.5 w-3.5" />
+                                )}
+                              </button>
+                              <button
                                 onClick={() => setDayChecked(log, true)}
                                 disabled={dayDone}
                                 title={t('markAllDone')}
@@ -308,7 +406,7 @@ export default function MyMonthDrawer({ currentUserId, date }: Props) {
                           <div className="rounded-lg border border-border/50 bg-muted/30 px-3 py-2.5">
                             <ChecklistEditor
                               value={log.activities ?? ''}
-                              onChange={() => {}}
+                              onChange={(v) => handleDraftChange(log.id, v)}
                               onSave={(v) => void persist(log.id, v)}
                             />
                           </div>
